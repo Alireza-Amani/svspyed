@@ -119,7 +119,7 @@ class InputRunFile:
         self.cntrl_flags["SOILINIFLAG"] = "0"
         self.cntrl_flags["NRSOILAYEREADFLAG"] = "1"
         self.cntrl_flags["RUNMODE"] = "runsvs noroute"
-        self.cntrl_flags["DIAGNOSEMODE"] = "on"
+        self.cntrl_flags["DIAGNOSEMODE"] = "off"
         self.cntrl_flags["TIMESTEPFLAG"] = "5"
 
     def write_lines(self):
