@@ -21,6 +21,7 @@ Notes:
 
 from copy import deepcopy
 from pathlib import Path
+from concurrent.futures import as_completed, ProcessPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -125,50 +126,87 @@ class PerturbAndRun:
             assert_dir_exist(self.different_met)
             self.different_met = Path(self.different_met)
 
+    def create_single_instance(self, scn_nr, scenario):
+        '''
+        Create a single SVS instance based on a parameter scenario.
+
+        Parameters
+        ----------
+        scn_nr : int
+            The scenario number.
+
+        scenario : dict
+            A dictionary that contains the parameter scenario.
+
+        Returns
+        -------
+        new_input.host_dir_name : str
+            The name of the host folder.
+
+        new_svs : SVSModel
+            The newly created SVS instance.
+        '''
+
+        new_input = deepcopy(self.svs_default_input)
+
+        # change the host folder name
+        new_input.host_dir_name = str(scenario)
+
+        # change the name of the SVS exec file
+        new_input.exec_file_name = F"{scn_nr}_{new_input.exec_file_name}"
+
+        # change the path to .met file (if needed)
+        if self.different_met:
+            new_path_met = Path(
+                self.different_met, F"basin_forcing_{scn_nr}.met"
+            )
+            new_input.copy_metfile = new_path_met
+
+        # create an SVS instance
+        new_svs = SVSModel(new_input, True, False)
+
+        # change the values of the SVS parameters
+        for key, value in self.parameter_scenarios[scenario].items():
+            if key in new_svs.mesh_param_file.parameters:
+                new_svs.mesh_param_file.parameters[key] = value
+            elif key in new_svs.mesh_param_file.state_vars:
+                new_svs.mesh_param_file.state_vars[key] = value
+            else:
+                raise KeyError(
+                    F"`{key}` is not among SVS parameters or state variables"
+                    F".\n"
+                )
+
+        # update the parameter file
+        new_svs.mesh_param_file.update_file()
+
+        return new_input.host_dir_name, new_svs
+
     def create_instances(self):
         '''
         Creates an SVS instace based on each of the parameter scenarios.
         '''
 
-        for scn_nr, scenario in enumerate(self.parameter_scenarios):
-            new_input = deepcopy(self.svs_default_input)
+        # create the instances in parallel
+        with ProcessPoolExecutor(max_workers=self.njobs) as executor:
+            # Schedule the execution of each instance creation
+            futures = {
+                executor.submit(self.create_single_instance, scn_nr, scenario): scenario
+                for scn_nr, scenario in enumerate(self.parameter_scenarios)
+            }
 
-            # change the host folder name
-            new_input.host_dir_name = str(scenario)
-
-            # change the name of the SVS exec file
-            new_input.exec_file_name = F"{scn_nr}_{new_input.exec_file_name}"
-
-            # change the path to .met file (if needed)
-            if self.different_met:
-                new_path_met = Path(
-                    self.different_met, F"basin_forcing_{scn_nr}.met"
-                )
-                new_input.copy_metfile = new_path_met
-
-            # create an SVS instance
-            new_svs = SVSModel(new_input, True, False)
-
-            # change the values of the SVS parameters
-            for key, value in self.parameter_scenarios[scenario].items():
-                if key in new_svs.mesh_param_file.parameters:
-                    new_svs.mesh_param_file.parameters[key] = value
-                elif key in new_svs.mesh_param_file.state_vars:
-                    new_svs.mesh_param_file.state_vars[key] = value
-                else:
-                    raise KeyError(
-                        F"`{key}` is not among SVS parameters or state variables"
-                        F".\n"
+            # Process the results as they arrive
+            for future in as_completed(futures):
+                scenario = futures[future]
+                try:
+                    host_dir_name, new_svs = future.result()
+                    self.svs_instances[host_dir_name] = new_svs
+                    print(
+                        f"The SVS instance modified based on scenario {scenario}.\n"
                     )
 
-            # update the parameter file
-            new_svs.mesh_param_file.update_file()
-
-            # cache the instance
-            self.svs_instances[new_input.host_dir_name] = new_svs
-            print(
-                F"the SVS instance modified based on scenario {scenario}.\n"
-            )
+                except Exception as exc:
+                    print(f"Scenario {scenario} generated an exception: {exc}")
 
     def run_all_parallel(self, output_time_scale: str = "daily") -> DataFrame:
         '''
