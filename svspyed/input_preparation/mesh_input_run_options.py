@@ -73,7 +73,7 @@ class InputRunFile:
     '''
 
     def __init__(self, host_dir_path: str, first_tstep: str, last_tstep: str,
-                 start_date: str = "", end_date: str = "",
+                 start_date: str = "", end_date: str = "", model_tsetp: int = 5,
                  verbose: bool = False):
 
         self.host_dir_path = host_dir_path
@@ -81,6 +81,7 @@ class InputRunFile:
         self.last_tstep = last_tstep
         self.start_date = start_date
         self.end_date = end_date
+        self.model_tsetp = model_tsetp
         self.verbose = verbose
 
         # create an empty dict to contain all the lines that will be written
@@ -120,7 +121,7 @@ class InputRunFile:
         self.cntrl_flags["NRSOILAYEREADFLAG"] = "1"
         self.cntrl_flags["RUNMODE"] = "runsvs noroute"
         self.cntrl_flags["DIAGNOSEMODE"] = "off"
-        self.cntrl_flags["TIMESTEPFLAG"] = "5"
+        self.cntrl_flags["TIMESTEPFLAG"] = F"{self.model_tsetp}"
 
     def write_lines(self):
         '''

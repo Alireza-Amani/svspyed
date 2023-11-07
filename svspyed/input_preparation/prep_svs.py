@@ -131,6 +131,7 @@ class PrepSVS:
             first_tstep=self.first_tstep, last_tstep=self.last_tstep,
             start_date=self.required_data.start_date,
             end_date=self.required_data.end_date,
+            model_tsetp=self.required_data.model_tsetp,
             verbose=self.verbose
         )
 
@@ -187,7 +188,7 @@ class PrepSVS:
         )
 
         try:
-          os.mkdir(self.host_dir_path)
+            os.mkdir(self.host_dir_path)
         except FileExistsError:
             pass
 
@@ -428,6 +429,7 @@ class ModelInputData:
     copy_metfile: Union[str, Path] = None
     metfile_t0: str = ""
     metfile_tn: str = ""
+    model_tsetp: int = 5  # in minutes
 
     # post initiation checks
 
@@ -449,6 +451,16 @@ class ModelInputData:
 
         # check the format of the `spinup_end_date`
         check_spinup_end_date_format(self.spinup_end_date)
+
+        # check model time step cannot be less than 1
+        assert (self.model_tsetp >= 1), (
+            F"The model time step cannot be less than 1. "
+            F"Current value: {self.model_tsetp}"
+        )
+        assert (isinstance(self.model_tsetp, int)), (
+            F"The model time step must be an integer. "
+            F"Current value: {self.model_tsetp}"
+        )
 
     # modifying the setattr to check for date formats
     def __setattr__(self, name, value):
