@@ -223,7 +223,7 @@ class PerturbAndRun:
         # After all processes are done, convert the proxy dictionary back to a regular dictionary
         self.svs_instances = dict(svs_instances_proxy)
 
-    def run_all_parallel(self, output_time_scale: str = "daily") -> DataFrame:
+    def run_all_parallel(self, output_time_scale: str = "daily", keepcols=None) -> DataFrame:
         '''
         Run several SVS instances in parallel.
 
@@ -275,7 +275,12 @@ class PerturbAndRun:
                     # get the output dataframe
                     model.read_output()
                     dfout = getattr(model, F"df{output_time_scale}_out").copy()
+                    if keepcols:
+                        dfout = dfout.loc[:, keepcols]
+                        # print(F"Keeping only {keepcols} columns of the output.")
+
                     dfout["member"] = str(svs_key)
+
                     dfall_outputs = pd.concat(
                         [dfall_outputs, dfout], axis=0
                     )
@@ -306,6 +311,9 @@ class PerturbAndRun:
 
             # get the output dataframe
             dfout = getattr(model, F"df{output_time_scale}_out").copy()
+            if keepcols:
+                dfout = dfout.loc[:, keepcols]
+                # print(F"Keeping only {keepcols} columns of the output.")
 
             dfout["member"] = str(svs_key)
             dfall_outputs = pd.concat(
