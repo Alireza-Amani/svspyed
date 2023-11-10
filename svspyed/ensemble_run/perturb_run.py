@@ -22,6 +22,7 @@ Notes:
 from copy import deepcopy
 from pathlib import Path
 from concurrent.futures import as_completed, ProcessPoolExecutor
+from multiprocessing import Manager
 
 import numpy as np
 import pandas as pd
@@ -126,7 +127,7 @@ class PerturbAndRun:
             assert_dir_exist(self.different_met)
             self.different_met = Path(self.different_met)
 
-    def create_single_instance(self, scn_nr, scenario):
+    def create_single_instance(self, scn_nr, scenario, svs_instances_proxy):
         '''
         Create a single SVS instance based on a parameter scenario.
 
@@ -180,33 +181,47 @@ class PerturbAndRun:
         # update the parameter file
         new_svs.mesh_param_file.update_file()
 
-        return new_input.host_dir_name, new_svs
+        # Instead of updating self.svs_instances directly, you'll update the proxy
+        svs_instances_proxy[scenario] = new_svs
+
+        return scenario
 
     def create_instances(self):
         '''
         Creates an SVS instace based on each of the parameter scenarios.
         '''
 
-        # create the instances in parallel
+        # Initialize a Manager and a proxy dictionary
+        manager = Manager()
+        svs_instances_proxy = manager.dict()
+
+        # Prepare the list of scenarios to avoid modifying the dictionary during iteration
+        scenarios_list = list(self.parameter_scenarios.items())
+
+        # Prepare the list of scenarios to avoid modifying the dictionary during iteration
+        scenarios_list = list(self.parameter_scenarios.items())
+
         with ProcessPoolExecutor(max_workers=self.njobs) as executor:
             # Schedule the execution of each instance creation
-            futures = {
-                executor.submit(self.create_single_instance, scn_nr, scenario): scenario
-                for scn_nr, scenario in enumerate(self.parameter_scenarios)
-            }
+            futures = [
+                executor.submit(self.create_single_instance,
+                                scn_nr, scenario, svs_instances_proxy)
+                for scn_nr, (scenario, _) in enumerate(scenarios_list)
+            ]
 
-            # Process the results as they arrive
+            # Wait for all futures to complete
             for future in as_completed(futures):
-                scenario = futures[future]
                 try:
-                    host_dir_name, new_svs = future.result()
-                    self.svs_instances[host_dir_name] = new_svs
+                    scenario = future.result()
                     print(
                         f"The SVS instance modified based on scenario {scenario}.\n"
-                    )
 
+                    )
                 except Exception as exc:
-                    print(f"Scenario {scenario} generated an exception: {exc}")
+                    print(f"Scenario generated an exception: {exc}")
+
+        # After all processes are done, convert the proxy dictionary back to a regular dictionary
+        self.svs_instances = dict(svs_instances_proxy)
 
     def run_all_parallel(self, output_time_scale: str = "daily") -> DataFrame:
         '''
