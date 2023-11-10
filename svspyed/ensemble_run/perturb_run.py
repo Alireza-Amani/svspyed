@@ -27,6 +27,9 @@ from multiprocessing import Manager
 import numpy as np
 import pandas as pd
 from pandas.core.frame import DataFrame
+from pyarrow.feather import write_feather
+import dask
+import dask.dataframe as dd
 
 from ..model.svs_model import SVSModel
 from ..input_preparation.prep_svs import ModelInputData
@@ -127,6 +130,10 @@ class PerturbAndRun:
             assert_dir_exist(self.different_met)
             self.different_met = Path(self.different_met)
 
+        # create a checkpoint folder in working dir
+        self.checkpoint_folder = self.svs_default_input.work_dir_path / "ens_checkpoint"
+        self.checkpoint_folder.mkdir(exist_ok=True)
+
     def create_single_instance(self, scn_nr, scenario, svs_instances_proxy):
         '''
         Create a single SVS instance based on a parameter scenario.
@@ -223,7 +230,10 @@ class PerturbAndRun:
         # After all processes are done, convert the proxy dictionary back to a regular dictionary
         self.svs_instances = dict(svs_instances_proxy)
 
-    def run_all_parallel(self, output_time_scale: str = "daily", keepcols=None) -> DataFrame:
+    def run_all_parallel(
+        self, output_time_scale: str = "daily", keepcols=None,
+        effort_id: str = "",
+    ):
         '''
         Run several SVS instances in parallel.
 
@@ -234,6 +244,13 @@ class PerturbAndRun:
             If "daily", it will collect the `dfdaily_out` attributes of the SVS
             instances, otherwise `dfhourly_out`.
             These are daily and hourly output dataframes of the model.
+
+        keepcols : list, default=None
+            A list of columns to keep from the output dataframe.
+
+        effort_id : str, default=""
+            A string to be added to the name of the output folder.
+
 
         Returns
         -------
@@ -281,9 +298,10 @@ class PerturbAndRun:
 
                     dfout["member"] = str(svs_key)
 
-                    dfall_outputs = pd.concat(
-                        [dfall_outputs, dfout], axis=0
-                    )
+                    # save the dataframe using feather in the checkpoint folder
+                    save_name = F"{effort_id}{svs_key}_{output_time_scale}_out.feather"
+                    save_path = self.checkpoint_folder / save_name
+                    write_feather(dfout, save_path, compression="zstd")
 
                     # remove the host folder
                     model.remove_host_folder_after_run()
@@ -316,18 +334,26 @@ class PerturbAndRun:
                 # print(F"Keeping only {keepcols} columns of the output.")
 
             dfout["member"] = str(svs_key)
-            dfall_outputs = pd.concat(
-                [dfall_outputs, dfout], axis=0
-            )
+            # save the dataframe using feather in the checkpoint folder
+            save_name = F"{effort_id}{svs_key}_{output_time_scale}_out.feather"
+            save_path = self.checkpoint_folder / save_name
+            write_feather(dfout, save_path, compression="zstd")
 
             # remove the host folder
             model.remove_host_folder_after_run()
             self.svs_instances[svs_key] = "Done"
 
         self.create_param_scen_df()
+
+        # read all the feather files in the checkpoint folder
+        feather_files = list(self.checkpoint_folder.glob("*.feather"))
+        delayed_reads = [read_feather_file(file) for file in feather_files]
+
+        ddf = dd.from_delayed(delayed_reads)
+        dfall_outputs = ddf.compute()
+
         self.dfoutput = dfall_outputs.copy()
 
-        # return dfall_outputs
 
     def create_param_scen_df(self):
         '''
@@ -373,4 +399,18 @@ class PerturbAndRun:
                     dfscenarios.loc[scn, col_names] = value
 
         self.dfscenarios = deepcopy(dfscenarios)
+
+
+@dask.delayed
+def read_feather_file(file):
+    '''
+    Read a feather file and return a dataframe.
+
+    Parameters
+    ----------
+    file : Path
+        Path to the feather file.
+    '''
+
+    return pd.read_feather(file)
 # ________________________________________________________________ <<< main >>>
