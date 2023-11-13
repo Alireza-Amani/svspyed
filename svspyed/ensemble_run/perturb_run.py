@@ -23,6 +23,7 @@ from copy import deepcopy
 from pathlib import Path
 from concurrent.futures import as_completed, ProcessPoolExecutor
 from multiprocessing import Manager
+import re
 
 import numpy as np
 import pandas as pd
@@ -101,7 +102,8 @@ class PerturbAndRun:
 
     def __init__(
         self, svs_default_input: ModelInputData, parameter_scenarios: dict,
-        different_met: Path = None, njobs: int = 2
+        different_met: Path = None, njobs: int = 2,
+        starting_scenario: int = 1, select_scenarios: list = None,
     ):
         # assert that elements stored in `parameter_scenarios` are dict
         # check the first element
@@ -118,7 +120,7 @@ class PerturbAndRun:
 
         # create and store SVS instances
         self.svs_instances = dict()
-        self.create_instances()
+        # self.create_instances()
 
         # dataframe to hold the parameter scenarios
         self.dfscenarios = pd.DataFrame()
@@ -133,6 +135,13 @@ class PerturbAndRun:
         # create a checkpoint folder in working dir
         self.checkpoint_folder = self.svs_default_input.work_dir_path / "ens_checkpoint"
         self.checkpoint_folder.mkdir(exist_ok=True)
+
+        self.scenario_names = sort_strings_by_number(list(self.parameter_scenarios))
+        self.processed_instances = 0 + (starting_scenario - 1)
+
+        if select_scenarios:
+            self.scenario_names = select_scenarios
+            self.processed_instances = 0
 
     def create_single_instance(self, scn_nr, scenario, svs_instances_proxy):
         '''
@@ -193,7 +202,7 @@ class PerturbAndRun:
 
         return scenario
 
-    def create_instances(self):
+    def create_instances(self, scenario_chunks: list = None):
         '''
         Creates an SVS instace based on each of the parameter scenarios.
         '''
@@ -203,10 +212,13 @@ class PerturbAndRun:
         svs_instances_proxy = manager.dict()
 
         # Prepare the list of scenarios to avoid modifying the dictionary during iteration
-        scenarios_list = list(self.parameter_scenarios.items())
+        # scenarios_list = list(self.parameter_scenarios.items())
+        scenarios_list = deepcopy(scenario_chunks)
 
-        # Prepare the list of scenarios to avoid modifying the dictionary during iteration
-        scenarios_list = list(self.parameter_scenarios.items())
+        # using these keys, get the items from the dict
+        scenarios_list = {
+            key: self.parameter_scenarios[key] for key in scenarios_list}
+        scenarios_list = list(scenarios_list.items())
 
         with ProcessPoolExecutor(max_workers=self.njobs) as executor:
             # Schedule the execution of each instance creation
@@ -263,6 +275,11 @@ class PerturbAndRun:
             "`output_time_scale` must be either 'daily' or 'hourly'"
         )
 
+        if not effort_id:
+            # if no effort_id is provided, use current time as the id
+            effort_id = "effort_"
+            effort_id += pd.Timestamp.now().strftime("%Y%m%d_%H")
+
         # collect the child processes in a list
         children = []
 
@@ -270,90 +287,81 @@ class PerturbAndRun:
         dfall_outputs = pd.DataFrame()
 
         # collect all the keys of `svs_instances`; will be used for del obj
-        all_svs_keys = deepcopy(list(self.svs_instances))
-        remaining_keys = deepcopy(all_svs_keys)
+        # all_svs_keys = deepcopy(list(self.svs_instances))
+        # remaining_keys = deepcopy(all_svs_keys)
 
-        for j, svs in enumerate(all_svs_keys):
+        while len(self.scenario_names) > self.processed_instances:
 
-            if (j % self.njobs == 0 and j != 0):
+            # counter variable
+            scenario_chunks = self.scenario_names[
+                self.processed_instances:self.processed_instances + self.njobs
+            ]
+
+            # create the instances
+            self.create_instances(scenario_chunks)
+
+            for j, svs in enumerate(scenario_chunks):
+
+                # create a child processes: i.e. initiate an SVS simulation run
+                children.append(self.svs_instances[svs].run_svs_parallel())
+                print(F"Running {svs} SVS instance ...\n")
+
+
+            if len(children) == self.njobs:
                 print(F"Waiting for the {self.njobs} processes to finish ...")
+            else:
+                print(
+                    F"Waiting for the last {len(children)} process(es) to finish ..."
+                )
 
-                for child in children:
-                    child.join()
+            self.processed_instances += self.njobs
 
-                print("Finished!\n")
-                children = []  # empty the child collector
+            # wait for the processes to finish
+            for child in children:
+                child.join()
 
-                # process the output now and del the svs instance
-                for key in range(j - self.njobs, j):
-                    svs_key = all_svs_keys[key]
-                    model = self.svs_instances[svs_key]
+            print("Finished!\n")
+            children = []  # empty the child collector
 
-                    # get the output dataframe
-                    model.read_output()
-                    dfout = getattr(model, F"df{output_time_scale}_out").copy()
-                    if keepcols:
-                        dfout = dfout.loc[:, keepcols]
-                        # print(F"Keeping only {keepcols} columns of the output.")
+            # process the output now and del the svs instance
+            for svs_key in scenario_chunks:
+                model = self.svs_instances[svs_key]
 
-                    dfout["member"] = str(svs_key)
+                # get the output dataframe
+                model.read_output()
+                dfout = getattr(model, F"df{output_time_scale}_out").copy()
+                dfout["member"] = str(svs_key)
+                if keepcols:
+                    dfout = dfout.loc[:, keepcols]
+                    # print(F"Keeping only {keepcols} columns of the output.")
 
-                    # save the dataframe using feather in the checkpoint folder
-                    save_name = F"{effort_id}{svs_key}_{output_time_scale}_out.feather"
-                    save_path = self.checkpoint_folder / save_name
-                    write_feather(dfout, save_path, compression="zstd")
 
-                    # remove the host folder
-                    model.remove_host_folder_after_run()
-                    self.svs_instances[svs_key] = "Done_folder_deleted"
-                    remaining_keys.remove(svs_key)
+                # save the dataframe using feather in the checkpoint folder
+                save_name = F"{effort_id}{svs_key}_{output_time_scale}_out.feather"
+                save_path = self.checkpoint_folder / save_name
 
-            # create a child processes: i.e. initiate an SVS simulation run
-            children.append(self.svs_instances[svs].run_svs_parallel())
-            print(F"Running {svs} SVS instance ...\n")
+                # remove duplicate columns
+                dfout = dfout.loc[:, ~dfout.columns.duplicated()]
+                write_feather(dfout, save_path, compression="zstd")
 
-        # run the remaining instances
-        print(
-            F"Waiting for the last {len(children)} process(es) to finish ...")
+                # remove the host folder
+                model.remove_host_folder_after_run()
+                self.svs_instances[svs_key] = "Done_folder_deleted"
 
-        for child in children:
-            child.join()
 
-        print("Finished!\n")
-        children = []
-
-        # process output for the last svs instances
-        for svs_key in remaining_keys:
-            model = self.svs_instances[svs_key]
-            model.read_output()
-
-            # get the output dataframe
-            dfout = getattr(model, F"df{output_time_scale}_out").copy()
-            if keepcols:
-                dfout = dfout.loc[:, keepcols]
-                # print(F"Keeping only {keepcols} columns of the output.")
-
-            dfout["member"] = str(svs_key)
-            # save the dataframe using feather in the checkpoint folder
-            save_name = F"{effort_id}{svs_key}_{output_time_scale}_out.feather"
-            save_path = self.checkpoint_folder / save_name
-            write_feather(dfout, save_path, compression="zstd")
-
-            # remove the host folder
-            model.remove_host_folder_after_run()
-            self.svs_instances[svs_key] = "Done"
-
+        # create a dataframe based on the parameter scenarios
         self.create_param_scen_df()
 
         # read all the feather files in the checkpoint folder
-        feather_files = list(self.checkpoint_folder.glob("*.feather"))
+        # IMPORTANT: only files starting with `effort_id` will be read
+        file_pattern = F"{effort_id}*{output_time_scale}_out.feather"
+        feather_files = list(self.checkpoint_folder.glob(file_pattern))
         delayed_reads = [read_feather_file(file) for file in feather_files]
 
         ddf = dd.from_delayed(delayed_reads)
         dfall_outputs = ddf.compute()
 
         self.dfoutput = dfall_outputs.copy()
-
 
     def create_param_scen_df(self):
         '''
@@ -413,4 +421,19 @@ def read_feather_file(file):
     '''
 
     return pd.read_feather(file)
+
+def extract_number(s):
+    """Extracts the first number found in a string."""
+    match = re.search(r'\d+', s)
+    return int(match.group()) if match else 0
+
+def sort_strings_by_number(strings):
+    """Sorts a list of strings based on the first number found in each string."""
+    return sorted(strings, key=extract_number)
+
+# # Example usage
+# strings = ["item3", "item12", "item1", "item20", "item2"]
+# sorted_strings = sort_strings_by_number(strings)
+# print(sorted_strings)
+
 # ________________________________________________________________ <<< main >>>
