@@ -291,11 +291,15 @@ class SVSModel(PrepSVS):
 
             dfhourly = dfhourly.loc[time_cond, :].reset_index(drop=True)
 
+
+        # set index to the local time
+        dfhourly.set_index("dtime_local", inplace=True)
+
         # these columns will be summed to daily values
         to_be_sum = ["DRAI", "ET", "PCP", "OVFLW"]
 
-        dfsumvar = dfhourly.loc[:, ["dtime_local"] + to_be_sum]
-        dfsumvar = dfsumvar.resample("1D", on="dtime_local").sum()
+        dfsumvar = dfhourly.loc[:, to_be_sum]
+        dfsumvar = dfsumvar.resample("1D").sum()
         dfsumvar["date"] = dfsumvar.index.date
         dfsumvar = dfsumvar.reset_index(drop=True)
 
@@ -309,8 +313,8 @@ class SVSModel(PrepSVS):
             'SNVDEN', 'SNVALB', 'WSNV', 'TSNV_1', 'TSNV_2',
         ]
 
-        dfavevar = dfhourly.loc[:, ["dtime_local"] + to_be_ave]
-        dfavevar = dfavevar.resample("1D", on="dtime_local").mean()
+        dfavevar = dfhourly.loc[:, to_be_ave]
+        dfavevar = dfavevar.resample("1D").mean()
         dfavevar["date"] = dfavevar.index.date
         dfavevar = dfavevar.reset_index(drop=True)
 
