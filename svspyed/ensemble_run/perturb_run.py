@@ -420,7 +420,7 @@ def read_feather_file(file):
         Path to the feather file.
     '''
 
-    return pd.read_feather(file)
+    return pd.read_feather(file, use_threads=False)
 
 def extract_number(s):
     """Extracts the first number found in a string."""

@@ -268,7 +268,7 @@ class SVSModel(PrepSVS):
         )
 
         # accumulated flux variables (column names)
-        acc_columns = ["ACC_DRAI", "ACC_ET", "ACC_OVFLW", "ACC_PCP"]
+        acc_columns = ["ACC_DRAI", "ACC_ET", "ACC_OVFLW", "ACC_PCP", "ACC_PG",]
 
         # create de-cumulated columns for each
         for acc_col in acc_columns:
@@ -296,7 +296,7 @@ class SVSModel(PrepSVS):
         dfhourly.set_index("dtime_local", inplace=True)
 
         # these columns will be summed to daily values
-        to_be_sum = ["DRAI", "ET", "PCP", "OVFLW"]
+        to_be_sum = ["DRAI", "ET", "PCP", "OVFLW", "PG",]
 
         dfsumvar = dfhourly.loc[:, to_be_sum]
         dfsumvar = dfsumvar.resample("1D").sum()

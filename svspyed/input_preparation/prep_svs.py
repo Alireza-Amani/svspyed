@@ -409,6 +409,8 @@ class ModelInputData:
     metfile_tn : str, default=""
         The last time-step of the meteo file. Provide it as: `YYYY-JDAY-HH-MM`.
 
+    model_tsetp : int, default=5
+        The model time step in minutes.
     '''
 
     work_dir_path: Union[str, Path]
