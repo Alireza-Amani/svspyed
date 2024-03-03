@@ -27,7 +27,7 @@ pip install -r requirements.txt
 **Usage**
 
 ```bash
-git clone hhhtps://github.com/Alireza-Amani/svspyed
+git clone hhtps://github.com/Alireza-Amani/svspyed
 cd svspyed
 pip install .
 ```
