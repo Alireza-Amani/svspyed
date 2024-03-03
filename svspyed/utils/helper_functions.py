@@ -257,14 +257,22 @@ def get_layering_df(enclosure):
         )
         depth += ith_block_thickness
 
-        dfe = pd.concat([
-            dfe,
-            pd.DataFrame({
+        if i == 0:
+            dfe = pd.DataFrame({
                 'depth': ith_block_depths,
                 'thickness': ith_block_step,
                 'soil_type': ith_block_soil
             })
-        ])
+
+        else:
+            dfe = pd.concat([
+                dfe,
+                pd.DataFrame({
+                    'depth': ith_block_depths,
+                    'thickness': ith_block_step,
+                    'soil_type': ith_block_soil
+                })
+            ])
 
     dfe.reset_index(drop=True, inplace=True)
     return dfe
@@ -327,7 +335,7 @@ def check_csv_columns(csv_path, expected_cols):
 
     missing = expected_csv_cols - csv_cols
     if missing:
-        return list(missing)
+        print(F"Missing columns in {csv_path}: {missing}")
     else:
         print("All columns found!")
 # ________________________________________________________________ <<< main >>>
