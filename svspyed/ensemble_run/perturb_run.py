@@ -104,6 +104,7 @@ class PerturbAndRun:
         self, svs_default_input: ModelInputData, parameter_scenarios: dict,
         different_met: Path = None, njobs: int = 2,
         starting_scenario: int = 1, select_scenarios: list = None,
+        verbose: bool = False,
     ):
         # assert that elements stored in `parameter_scenarios` are dict
         # check the first element
@@ -117,6 +118,7 @@ class PerturbAndRun:
         self.parameter_scenarios = parameter_scenarios
         self.different_met = different_met
         self.njobs = njobs
+        self.verbose = verbose
 
         # create and store SVS instances
         self.svs_instances = dict()
@@ -142,6 +144,10 @@ class PerturbAndRun:
         if select_scenarios:
             self.scenario_names = select_scenarios
             self.processed_instances = 0
+
+        if verbose:
+            # report the number of scenarios
+            print(F"\nNumber of scenarios: {len(self.scenario_names)}\n")
 
     def create_single_instance(self, scn_nr, scenario, svs_instances_proxy):
         '''
