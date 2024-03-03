@@ -335,7 +335,7 @@ def check_csv_columns(csv_path, expected_cols):
 
     missing = expected_csv_cols - csv_cols
     if missing:
-        print(F"Missing columns in {csv_path}: {missing}")
+        print(F"Missing columns in {csv_path.name}: {missing}")
     else:
         print("All columns found!")
 # ________________________________________________________________ <<< main >>>
