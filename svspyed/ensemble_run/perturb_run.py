@@ -113,6 +113,10 @@ class PerturbAndRun:
             )
         ), ("Elements of `parameter_scenarios` attribute must be of type dict!")
 
+
+        # assert that there is at least one met file
+        assert met_paths, "At least one met file is required."
+
         self.svs_default_input = deepcopy(svs_default_input)
         self.parameter_scenarios = parameter_scenarios
         self.met_paths = list(met_paths)
