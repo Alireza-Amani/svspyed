@@ -24,6 +24,8 @@ from pathlib import Path
 from concurrent.futures import as_completed, ProcessPoolExecutor
 from multiprocessing import Manager
 import re
+from typing import Iterable
+from collections import OrderedDict
 
 import numpy as np
 import pandas as pd
@@ -62,14 +64,10 @@ class PerturbAndRun:
                 scenario_2 = {'sand': [14, 14, 14], 'clay': [6, 6, 6, 6]}
         ... )
 
-    different_met : Path
-        Path to the dir containing set of different met files to be used for
-        different parameter scenarios. Each of the met files must be named as
-        `basin_forcing_{scn_nr}.met`, where `scn_nr` is the scenario number
-        starting from 0.
-
-        If `different_met` is None, the default met file will be used for all
-        the scenarios.
+    met_paths : Iterable[Path]
+        An iterable of paths to the met files. Each of the met files must be
+        named as `basin_forcing_{scn_nr}.met`, where `scn_nr` is the scenario
+        number starting from 0.
 
     njobs : int, default=2
         The max. number of CPU cores to use.
@@ -102,7 +100,8 @@ class PerturbAndRun:
 
     def __init__(
         self, svs_default_input: ModelInputData, parameter_scenarios: dict,
-        different_met: Path = None, njobs: int = 2,
+        met_paths: Iterable[Path] = None,
+        njobs: int = 2,
         starting_scenario: int = 1, select_scenarios: list = None,
         verbose: bool = False,
     ):
@@ -116,7 +115,7 @@ class PerturbAndRun:
 
         self.svs_default_input = deepcopy(svs_default_input)
         self.parameter_scenarios = parameter_scenarios
-        self.different_met = different_met
+        self.met_paths = list(met_paths)
         self.njobs = njobs
         self.verbose = verbose
 
@@ -130,36 +129,55 @@ class PerturbAndRun:
         # dataframe to hold the output of the SVS instances
         self.dfoutput = pd.DataFrame()
 
-        if self.different_met:
-            assert_dir_exist(self.different_met)
-            self.different_met = Path(self.different_met)
+        # a dict to hold the different met files for each scenario
+        self.met_scenarios = OrderedDict()
+
+        self.all_scenarios = OrderedDict()
+
+        for nr, met_file in enumerate(self.met_paths):
+            met_file = Path(met_file)
+            assert met_file.exists(), F"{met_file} does not exist."
+
+            # store the met file
+            self.met_scenarios[F"met_scen_{nr}"] = met_file
+
 
         # create a checkpoint folder in working dir
         self.checkpoint_folder = self.svs_default_input.work_dir_path / "ens_checkpoint"
         self.checkpoint_folder.mkdir(exist_ok=True)
 
-        self.scenario_names = sort_strings_by_number(list(self.parameter_scenarios))
+        self.parameter_scenario_names = sort_strings_by_number(list(self.parameter_scenarios))
         self.processed_instances = 0 + (starting_scenario - 1)
 
+        # populate the all_scenarios dict
+        for met_sc in self.met_scenarios:
+            for param_sc in self.parameter_scenario_names:
+                name = F"parameter_{param_sc}_{met_sc}"
+                self.all_scenarios[name] = (param_sc, met_sc)
+
         if select_scenarios:
-            self.scenario_names = select_scenarios
+            self.all_scenarios = select_scenarios
             self.processed_instances = 0
 
         if verbose:
             # report the number of scenarios
-            print(F"\nNumber of scenarios: {len(self.scenario_names)}\n")
+            print(F"\nNumber of scenarios: {len(self.all_scenarios)}\n")
 
-    def create_single_instance(self, scn_nr, scenario, svs_instances_proxy):
+    def create_single_instance(self,
+            scn_label: str,
+            scenario: tuple,
+            svs_instances_proxy: dict,
+        ):
         '''
         Create a single SVS instance based on a parameter scenario.
 
         Parameters
         ----------
-        scn_nr : int
-            The scenario number.
+        scn_label : str
+            The label of the scenario.
 
-        scenario : dict
-            A dictionary that contains the parameter scenario.
+        scenario : tuple (param_scen, met_scen)
+            A tuple containing the parameter scenario number and the met scenario number.
 
         Returns
         -------
@@ -173,23 +191,20 @@ class PerturbAndRun:
         new_input = deepcopy(self.svs_default_input)
 
         # change the host folder name
-        new_input.host_dir_name = str(scenario)
+        new_input.host_dir_name = str(scn_label)
 
         # change the name of the SVS exec file
-        new_input.exec_file_name = F"{scn_nr}_{new_input.exec_file_name}"
+        new_input.exec_file_name = F"{scn_label}_{new_input.exec_file_name}"
 
-        # change the path to .met file (if needed)
-        if self.different_met:
-            new_path_met = Path(
-                self.different_met, F"basin_forcing_{scn_nr}.met"
-            )
-            new_input.copy_metfile = new_path_met
+        # change the met file path
+        new_path_met = self.met_scenarios[scenario[1]]
+        new_input.copy_metfile = new_path_met
 
         # create an SVS instance
         new_svs = SVSModel(new_input, True, False)
 
         # change the values of the SVS parameters
-        for key, value in self.parameter_scenarios[scenario].items():
+        for key, value in self.parameter_scenarios[scenario[0]].items():
             if key in new_svs.mesh_param_file.parameters:
                 new_svs.mesh_param_file.parameters[key] = value
             elif key in new_svs.mesh_param_file.state_vars:
@@ -204,9 +219,9 @@ class PerturbAndRun:
         new_svs.mesh_param_file.update_file()
 
         # Instead of updating self.svs_instances directly, you'll update the proxy
-        svs_instances_proxy[scenario] = new_svs
+        svs_instances_proxy[scn_label] = new_svs
 
-        return scenario
+        return scn_label
 
     def create_instances(self, scenario_chunks: list = None):
         '''
@@ -218,20 +233,19 @@ class PerturbAndRun:
         svs_instances_proxy = manager.dict()
 
         # Prepare the list of scenarios to avoid modifying the dictionary during iteration
-        # scenarios_list = list(self.parameter_scenarios.items())
         scenarios_list = deepcopy(scenario_chunks)
 
         # using these keys, get the items from the dict
         scenarios_list = {
-            key: self.parameter_scenarios[key] for key in scenarios_list}
-        scenarios_list = list(scenarios_list.items())
+            key: self.all_scenarios[key] for key in scenarios_list
+        }
 
         with ProcessPoolExecutor(max_workers=self.njobs) as executor:
             # Schedule the execution of each instance creation
             futures = [
                 executor.submit(self.create_single_instance,
-                                scn_nr, scenario, svs_instances_proxy)
-                for scn_nr, (scenario, _) in enumerate(scenarios_list)
+                                scn_label, scenario, svs_instances_proxy)
+                for scn_label, scenario in scenarios_list.items()
             ]
 
             # Wait for all futures to complete
@@ -296,10 +310,10 @@ class PerturbAndRun:
         # all_svs_keys = deepcopy(list(self.svs_instances))
         # remaining_keys = deepcopy(all_svs_keys)
 
-        while len(self.scenario_names) > self.processed_instances:
+        while len(self.all_scenarios) > self.processed_instances:
 
             # counter variable
-            scenario_chunks = self.scenario_names[
+            scenario_chunks = list(self.all_scenarios.keys())[
                 self.processed_instances:self.processed_instances + self.njobs
             ]
 
