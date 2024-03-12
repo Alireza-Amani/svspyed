@@ -72,6 +72,12 @@ class PerturbAndRun:
     njobs : int, default=2
         The max. number of CPU cores to use.
 
+    starting_scenario : int, default=1
+        The scenario number to start from.
+
+    select_scenarios : list, default=None
+        Only run the scenarios in this list.
+
     Attributes
     ----------
     svs_instances : dict
@@ -160,6 +166,11 @@ class PerturbAndRun:
                 self.all_scenarios[name] = (param_sc, met_sc)
 
         if select_scenarios:
+            # remove the scenarios not in the list
+            select_scenarios = set(select_scenarios)
+            select_scenarios = {
+                key: self.all_scenarios[key] for key in select_scenarios
+            }
             self.all_scenarios = select_scenarios
             self.processed_instances = 0
 
