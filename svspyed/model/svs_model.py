@@ -221,11 +221,11 @@ class SVSModel(PrepSVS):
         )
 
         # make a date-time column
-        dfhourly_out["date_utc"] = (dfhourly_out["YEAR"] * 1000) + dfhourly_out["JDAY"]
-        dfhourly_out["date_utc"] *= 100
-        dfhourly_out["date_utc"] += dfhourly_out["HOUR"]
-        dfhourly_out["date_utc"] = pd.to_datetime(
-            dfhourly_out["date_utc"], format="%Y%j%H", utc=True
+        dfhourly_out['date_utc'] = pd.to_datetime(
+            dfhourly_out["YEAR"].astype(str) +
+            dfhourly_out["JDAY"].astype(str).str.zfill(3) +
+            dfhourly_out["HOUR"].astype(str).str.zfill(2),
+            format="%Y%j%H", utc=True
         )
 
         # if there is a column that starts with `Unnamed`, then remove it
@@ -242,6 +242,8 @@ class SVSModel(PrepSVS):
                 )
                 dfhourly_out = dfhourly_out.drop(columns=col)
 
+        # get a defragmented copy of the dataframe
+        dfhourly_out = dfhourly_out.copy()
         self.dfhourly_out = dfhourly_out
 
         # create a daily dataframe based on the hourly outputs
