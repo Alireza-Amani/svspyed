@@ -94,42 +94,105 @@ svspyed/
 
 ```python
 from pathlib import Path
+from collections import namedtuple
+
+from svspyed.utils.helper_functions import get_layering_df, populate_layering_df
 from svspyed.input_preparation.prep_svs import ModelInputData
 from svspyed.model.svs_model import SVSModel
 
-# 1. Define all inputs
-required_data = ModelInputData(
-    work_dir_path=Path("/path/to/working/dir"),
-    host_dir_name="my_svs_run",
-    soilcover_info=Path("/path/to/soilcover.csv"),   # or a DataFrame
-    metfile_path=Path("/path/to/meteo.csv"),
-    exec_file_path=Path("/path/to/SVS_executable"),
-    meteo_col_names={
-        "utc_dtime":             "datetime_utc",
-        "air_temperature":       "Tair_degC",
-        "precipitation":         "Precip_mm",
-        "wind_speed":            "Wind_ms",
-        "atmospheric_pressure":  "Pres_Pa",
-        "shortwave_radiation":   "SW_Wm2",
-        "longwave_radiation":    "LW_Wm2",
-        "specific_humidity":     "q_kgkg",
-        "relative_humidity":     "RH_pct",
-    },
-    param_col_names={"sand": "sand_pct", "clay": "clay_pct"},
-    model_params={"KFICE": 1},
-    start_date="2018-183-04-00",   # YYYY-JDAY-HH-MM
-    end_date="2019-001-00-00",
-    spinup_end_date="2019-01-01 00:00:00",
-    time_zone="America/Montreal",
+# --- 1. Define soil types inline (no external CSV needed) -------------------
+
+# Container for the physical properties of one soil type
+SoilType = namedtuple("SoilType", [
+    "code",
+    "sand", "clay",           # percent
+    "wsat", "wfc", "wwilt",   # volumetric fraction
+    "ksat",                   # m s⁻¹
+    "psisat", "bcoef",        # mH₂O, unitless
+    "rhosoil",                # kg m⁻³
+])
+
+# Container that pairs a layering string with the soil types it references
+Enclosure = namedtuple("Enclosure", ["layering", "soil_layers"])
+
+# Container for site-specific (location/geometry) parameters
+SiteParams = namedtuple("SiteParams", [
+    "deglat", "deglng",
+    "slop", "zusl", "ztsl",
+    "observed_forcing", "draindens", "vf_type",
+])
+
+# Define one soil type
+sandy_loam = SoilType(
+    code    = "SL",
+    sand    = 66.2, clay  = 7.7,
+    wsat    = 0.329, wfc  = 0.05, wwilt = 0.01,
+    ksat    = 9.49e-06,
+    psisat  = 0.34, bcoef = 1.48,
+    rhosoil = 1604.91,
 )
 
-# 2. Instantiate — this creates all input files automatically
+# Layering string: "<total depth cm>:<layer thickness cm>:<soil code>"
+# Multiple blocks can be combined: e.g. "15:2.5:SL + 175:5:SL"
+enclosure = Enclosure(
+    layering    = "190:5:SL",   # 190 cm total, 5 cm layers, all sandy_loam
+    soil_layers = [sandy_loam],
+)
+
+site_params = SiteParams(
+    deglat = 45.82, deglng = -72.37,
+    slop   = 0.02,  zusl   = 10.0, ztsl = 1.5,
+    observed_forcing = "height", draindens = 0.0, vf_type = 13,
+)
+
+# Build the soilcover DataFrame from the objects above
+dfenc = get_layering_df(enclosure)
+dfenc = populate_layering_df(dfenc, enclosure, site_params)
+
+# Parameter names used in dfenc (all SoilType fields except 'code', plus SiteParams)
+layer_params = tuple(f for f in sandy_loam._fields if f != "code")
+
+# --- 2. Bundle all inputs ---------------------------------------------------
+
+required_data = ModelInputData(
+    work_dir_path  = Path("/path/to/working/dir"),
+    host_dir_name  = "my_svs_run",
+    soilcover_info = dfenc,          # DataFrame built above; a Path to a CSV also works
+    metfile_path   = Path("/path/to/meteo.csv"),
+    exec_file_path = Path("/path/to/SVS_executable"),
+    meteo_col_names = {
+        "utc_dtime":            "datetime_utc",
+        "air_temperature":      "Tair_degC",
+        "precipitation":        "Precip_mm",
+        "wind_speed":           "Wind_ms",
+        "atmospheric_pressure": "Pres_Pa",
+        "shortwave_radiation":  "SW_Wm2",
+        "longwave_radiation":   "LW_Wm2",
+        "specific_humidity":    "q_kgkg",
+        "relative_humidity":    "RH_pct",
+    },
+    param_col_names = {
+        **{k: k for k in layer_params},
+        **{k: k for k in site_params._fields},
+    },
+    model_params = {
+        "SCHMSOL": "SVS", "lsoil_freezing_svs1": ".TRUE.", "soiltext": "NIL",
+        "read_user_parameters": 1, "KFICE": 0, "OPT_SNOW": 2,
+    },
+    start_date      = "2018-183-04-00",   # YYYY-JDAY-HH-MM
+    end_date        = "2019-001-00-00",
+    spinup_end_date = "2019-01-01 00:00:00",
+    time_zone       = "America/Montreal",
+    model_tsetp     = 5,
+)
+
+# --- 3. Instantiate — creates all SVS input files automatically -------------
 svs = SVSModel(required_data, verbose=True)
 
-# 3. Run
+# --- 4. Run -----------------------------------------------------------------
 svs.run_svs()
 
-# 4. Inspect output
+# --- 5. Inspect output ------------------------------------------------------
 print(svs.dfhourly_out.head())
 print(svs.dfdaily_out.head())
 ```
